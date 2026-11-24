@@ -1,0 +1,421 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedInVerified() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email is string
+        && request.auth.token.email.size() >= 5;
+    }
+
+    function isOwnerUserDoc(userId) {
+      return isSignedInVerified()
+        && isValidId(userId)
+        && request.auth.uid == userId
+        && exists(/databases/$(database)/documents/users/$(userId));
+    }
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'email', 'preferredCurrency', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'preferredCurrency', 'createdAt', 'updatedAt'])
+        && data.uid is string
+        && data.uid.size() >= 1
+        && data.uid.size() <= 128
+        && data.uid.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.uid == request.auth.uid
+        && data.email is string
+        && data.email.size() >= 5
+        && data.email.size() <= 254
+        && data.email == request.auth.token.email
+        && (!('displayName' in data) || (data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120))
+        && data.preferredCurrency is string
+        && data.preferredCurrency == 'TZS'
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidHoldingItem(data) {
+      return data.keys().hasAll(['ownerUid', 'localId', 'symbol', 'kind', 'units', 'cost', 'price', 'updated', 'date', 'source', 'url', 'selector', 'regex', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerUid', 'localId', 'symbol', 'kind', 'units', 'cost', 'price', 'updated', 'date', 'source', 'url', 'selector', 'regex', 'createdAt', 'updatedAt'])
+        && data.ownerUid is string
+        && data.ownerUid.size() >= 1
+        && data.ownerUid.size() <= 128
+        && data.ownerUid == request.auth.uid
+        && data.localId is number
+        && data.localId >= 1
+        && data.symbol is string
+        && data.symbol.size() >= 1
+        && data.symbol.size() <= 120
+        && data.kind is string
+        && data.kind.size() >= 1
+        && data.kind.size() <= 40
+        && data.units is number
+        && data.units >= 0
+        && data.cost is number
+        && data.cost >= 0
+        && data.price is number
+        && data.price >= 0
+        && data.updated is string
+        && data.updated.size() <= 64
+        && data.date is string
+        && data.date.size() <= 20
+        && data.source is string
+        && data.source.size() >= 1
+        && data.source.size() <= 40
+        && data.url is string
+        && data.url.size() <= 500
+        && data.selector is string
+        && data.selector.size() <= 200
+        && data.regex is string
+        && data.regex.size() <= 200
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBalanceItem(data) {
+      return data.keys().hasAll(['ownerUid', 'localId', 'section', 'name', 'amount', 'date', 'type', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerUid', 'localId', 'section', 'name', 'amount', 'date', 'type', 'createdAt', 'updatedAt'])
+        && data.ownerUid is string
+        && data.ownerUid.size() >= 1
+        && data.ownerUid.size() <= 128
+        && data.ownerUid == request.auth.uid
+        && data.localId is number
+        && data.localId >= 1
+        && data.section in ['current_asset', 'current_liability', 'longterm_asset', 'longterm_liability']
+        && data.name is string
+        && data.name.size() >= 1
+        && data.name.size() <= 160
+        && data.amount is number
+        && data.date is string
+        && data.date.size() <= 20
+        && data.type is string
+        && data.type.size() >= 1
+        && data.type.size() <= 40
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTransactionItem(data) {
+      return data.keys().hasAll(['ownerUid', 'localId', 'date', 'activity', 'category', 'description', 'amount', 'receiptId', 'receiptName', 'receiptMime', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerUid', 'localId', 'date', 'activity', 'category', 'description', 'amount', 'receiptId', 'receiptName', 'receiptMime', 'createdAt', 'updatedAt'])
+        && data.ownerUid is string
+        && data.ownerUid.size() >= 1
+        && data.ownerUid.size() <= 128
+        && data.ownerUid == request.auth.uid
+        && data.localId is number
+        && data.localId >= 1
+        && data.date is string
+        && data.date.size() <= 20
+        && data.activity in ['operating', 'investing', 'financing']
+        && data.category is string
+        && data.category.size() >= 1
+        && data.category.size() <= 80
+        && data.description is string
+        && data.description.size() <= 300
+        && data.amount is number
+        && data.receiptId is string
+        && data.receiptId.size() <= 80
+        && (data.receiptId == '' || data.receiptId.matches('^[a-zA-Z0-9._\\-]+$'))
+        && data.receiptName is string
+        && data.receiptName.size() <= 200
+        && data.receiptMime is string
+        && data.receiptMime.size() <= 80
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidIndicatorItem(data) {
+      return data.keys().hasAll(['ownerUid', 'localId', 'name', 'url', 'selector', 'regex', 'value', 'updated', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerUid', 'localId', 'name', 'url', 'selector', 'regex', 'value', 'updated', 'createdAt', 'updatedAt'])
+        && data.ownerUid is string
+        && data.ownerUid.size() >= 1
+        && data.ownerUid.size() <= 128
+        && data.ownerUid == request.auth.uid
+        && data.localId is number
+        && data.localId >= 1
+        && data.name is string
+        && data.name.size() >= 1
+        && data.name.size() <= 160
+        && data.url is string
+        && data.url.size() >= 1
+        && data.url.size() <= 500
+        && data.selector is string
+        && data.selector.size() <= 200
+        && data.regex is string
+        && data.regex.size() <= 200
+        && data.value is string
+        && data.value.size() <= 80
+        && data.updated is string
+        && data.updated.size() <= 64
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFixedExpenseEntry(entry) {
+      return entry is map
+        && entry.keys().hasAll(['id', 'category', 'description', 'amount'])
+        && entry.keys().hasOnly(['id', 'category', 'description', 'amount'])
+        && entry.id is string
+        && entry.id.size() >= 1
+        && entry.id.size() <= 64
+        && entry.category is string
+        && entry.category.size() >= 1
+        && entry.category.size() <= 80
+        && entry.description is string
+        && entry.description.size() >= 1
+        && entry.description.size() <= 120
+        && entry.amount is number
+        && entry.amount >= 0;
+    }
+
+    function isValidGeneralSettings(data) {
+      return data.keys().hasAll(['ownerUid', 'currency', 'target', 'autoRefreshOnOpen', 'onboardingCompleted', 'khumsEnabled', 'monthlyFixedExpenses', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerUid', 'currency', 'language', 'target', 'autoRefreshOnOpen', 'onboardingCompleted', 'khumsEnabled', 'monthlyFixedExpenses', 'createdAt', 'updatedAt'])
+        && data.ownerUid is string
+        && data.ownerUid.size() >= 1
+        && data.ownerUid.size() <= 128
+        && data.ownerUid == request.auth.uid
+        && data.currency == 'TZS'
+        && (!('language' in data) || (data.language is string && data.language in ['en', 'sw']))
+        && data.target is number
+        && data.target > 0
+        && data.autoRefreshOnOpen is bool
+        && data.onboardingCompleted is bool
+        && data.khumsEnabled is bool
+        && data.monthlyFixedExpenses is list
+        && data.monthlyFixedExpenses.size() <= 25
+        && (data.monthlyFixedExpenses.size() == 0 || isValidFixedExpenseEntry(data.monthlyFixedExpenses[0]))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSubscriptionSettings(data) {
+      return data.keys().hasAll(['ownerUid', 'plan', 'paidAmountUsd', 'paymentProvider', 'paymentRef', 'payerHint', 'paidAt', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerUid', 'plan', 'paidAmountUsd', 'paymentProvider', 'paymentRef', 'payerHint', 'paidAt', 'createdAt', 'updatedAt'])
+        && data.ownerUid is string
+        && data.ownerUid.size() >= 1
+        && data.ownerUid.size() <= 128
+        && data.ownerUid == request.auth.uid
+        && data.plan is string
+        && data.plan in ['free', 'pro']
+        && data.paidAmountUsd is number
+        && data.paidAmountUsd >= 0
+        && data.paidAmountUsd <= 10000
+        && data.paymentProvider is string
+        && data.paymentProvider in ['none', 'stripe', 'mobile_money', 'card_preview', 'qr_whatsapp', 'admin_manual']
+        && data.paymentRef is string
+        && data.paymentRef.size() <= 120
+        && data.payerHint is string
+        && data.payerHint.size() <= 80
+        && data.paidAt is string
+        && data.paidAt.size() <= 40
+        && (data.plan == 'free' || (data.paidAmountUsd >= 5 && data.paymentProvider != 'none' && data.paymentRef.size() >= 6 && data.paidAt.size() >= 8))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidKhumsTaxSettings(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'khumsYearDate', 'khumsMethod', 'khumsBankCash', 'khumsHandCash',
+          'khumsPortfolioValue', 'khumsConsumablesValue', 'khumsReceivables',
+          'khumsPriorPaidBasis', 'khumsExemptReceipts', 'khumsMaunahDebt',
+          'khumsAnnualNetIncome', 'khumsAnnualMaunahExpense',
+          'traPayFrequency', 'traEmploymentMode', 'traGrossPay', 'traNssfRatePct',
+          'traSecondaryIncomeAnnual', 'traDseDividendsAnnual', 'traUnlistedDividendsAnnual',
+          'traDseCapitalGainsAnnual', 'traDseBelow25Pct', 'traUnlistedCapitalGainsAnnual',
+          'traRentalInterestAnnual', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'khumsYearDate', 'khumsMethod', 'khumsBankCash', 'khumsHandCash',
+          'khumsPortfolioValue', 'khumsConsumablesValue', 'khumsReceivables',
+          'khumsPriorPaidBasis', 'khumsExemptReceipts', 'khumsMaunahDebt',
+          'khumsAnnualNetIncome', 'khumsAnnualMaunahExpense',
+          'traPayFrequency', 'traEmploymentMode', 'traGrossPay', 'traNssfRatePct',
+          'traSecondaryIncomeAnnual', 'traDseDividendsAnnual', 'traUnlistedDividendsAnnual',
+          'traDseCapitalGainsAnnual', 'traDseBelow25Pct', 'traUnlistedCapitalGainsAnnual',
+          'traRentalInterestAnnual', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerUid is string
+        && data.ownerUid.size() >= 1
+        && data.ownerUid.size() <= 128
+        && data.ownerUid == request.auth.uid
+        && data.khumsYearDate is string
+        && data.khumsYearDate.size() <= 20
+        && data.khumsMethod in ['wealth', 'income_flow']
+        && data.khumsBankCash is number && data.khumsBankCash >= 0
+        && data.khumsHandCash is number && data.khumsHandCash >= 0
+        && data.khumsPortfolioValue is number && data.khumsPortfolioValue >= 0
+        && data.khumsConsumablesValue is number && data.khumsConsumablesValue >= 0
+        && data.khumsReceivables is number && data.khumsReceivables >= 0
+        && data.khumsPriorPaidBasis is number && data.khumsPriorPaidBasis >= 0
+        && data.khumsExemptReceipts is number && data.khumsExemptReceipts >= 0
+        && data.khumsMaunahDebt is number && data.khumsMaunahDebt >= 0
+        && data.khumsAnnualNetIncome is number && data.khumsAnnualNetIncome >= 0
+        && data.khumsAnnualMaunahExpense is number && data.khumsAnnualMaunahExpense >= 0
+        && data.traPayFrequency in ['monthly', 'annual']
+        && data.traEmploymentMode in ['resident_primary', 'resident_secondary', 'non_resident']
+        && data.traGrossPay is number && data.traGrossPay >= 0
+        && data.traNssfRatePct is number && data.traNssfRatePct >= 0 && data.traNssfRatePct <= 50
+        && data.traSecondaryIncomeAnnual is number && data.traSecondaryIncomeAnnual >= 0
+        && data.traDseDividendsAnnual is number && data.traDseDividendsAnnual >= 0
+        && data.traUnlistedDividendsAnnual is number && data.traUnlistedDividendsAnnual >= 0
+        && data.traDseCapitalGainsAnnual is number && data.traDseCapitalGainsAnnual >= 0
+        && data.traDseBelow25Pct is bool
+        && data.traUnlistedCapitalGainsAnnual is number && data.traUnlistedCapitalGainsAnnual >= 0
+        && data.traRentalInterestAnnual is number && data.traRentalInterestAnnual >= 0
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedInVerified() && isValidId(userId) && request.auth.uid == userId;
+      allow list: if false;
+      allow create: if isSignedInVerified()
+        && isValidId(userId)
+        && request.auth.uid == userId
+        && isValidUserProfile(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isSignedInVerified()
+        && isValidId(userId)
+        && request.auth.uid == userId
+        && isValidUserProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().email == existing().email
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'preferredCurrency', 'updatedAt']);
+      allow delete: if false;
+
+      match /holdings/{itemId} {
+        allow get: if isOwnerUserDoc(userId) && isValidId(itemId);
+        allow list: if isSignedInVerified() && request.auth.uid == userId && resource.data.ownerUid == request.auth.uid;
+        allow create: if isOwnerUserDoc(userId)
+          && isValidId(itemId)
+          && isValidHoldingItem(incoming())
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isOwnerUserDoc(userId)
+          && isValidId(itemId)
+          && isValidHoldingItem(incoming())
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().localId == existing().localId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['symbol', 'kind', 'units', 'cost', 'price', 'updated', 'date', 'source', 'url', 'selector', 'regex', 'updatedAt']);
+        allow delete: if isOwnerUserDoc(userId) && isValidId(itemId);
+      }
+
+      match /balances/{itemId} {
+        allow get: if isOwnerUserDoc(userId) && isValidId(itemId);
+        allow list: if isSignedInVerified() && request.auth.uid == userId && resource.data.ownerUid == request.auth.uid;
+        allow create: if isOwnerUserDoc(userId)
+          && isValidId(itemId)
+          && isValidBalanceItem(incoming())
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isOwnerUserDoc(userId)
+          && isValidId(itemId)
+          && isValidBalanceItem(incoming())
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().localId == existing().localId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['section', 'name', 'amount', 'date', 'type', 'updatedAt']);
+        allow delete: if isOwnerUserDoc(userId) && isValidId(itemId);
+      }
+
+      match /transactions/{itemId} {
+        allow get: if isOwnerUserDoc(userId) && isValidId(itemId);
+        allow list: if isSignedInVerified() && request.auth.uid == userId && resource.data.ownerUid == request.auth.uid;
+        allow create: if isOwnerUserDoc(userId)
+          && isValidId(itemId)
+          && isValidTransactionItem(incoming())
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isOwnerUserDoc(userId)
+          && isValidId(itemId)
+          && isValidTransactionItem(incoming())
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().localId == existing().localId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['date', 'activity', 'category', 'description', 'amount', 'receiptId', 'receiptName', 'receiptMime', 'updatedAt']);
+        allow delete: if isOwnerUserDoc(userId) && isValidId(itemId);
+      }
+
+      match /indicators/{itemId} {
+        allow get: if isOwnerUserDoc(userId) && isValidId(itemId);
+        allow list: if isSignedInVerified() && request.auth.uid == userId && resource.data.ownerUid == request.auth.uid;
+        allow create: if isOwnerUserDoc(userId)
+          && isValidId(itemId)
+          && isValidIndicatorItem(incoming())
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isOwnerUserDoc(userId)
+          && isValidId(itemId)
+          && isValidIndicatorItem(incoming())
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().localId == existing().localId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'url', 'selector', 'regex', 'value', 'updated', 'updatedAt']);
+        allow delete: if isOwnerUserDoc(userId) && isValidId(itemId);
+      }
+
+      match /appSettings/{docId} {
+        allow get: if isOwnerUserDoc(userId) && docId in ['general', 'khumsTax', 'subscription'];
+        allow list: if false;
+        allow create: if isOwnerUserDoc(userId)
+          && (
+            (docId == 'general' && isValidGeneralSettings(incoming())) ||
+            (docId == 'khumsTax' && isValidKhumsTaxSettings(incoming())) ||
+            (docId == 'subscription' && isValidSubscriptionSettings(incoming()))
+          )
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isOwnerUserDoc(userId)
+          && (
+            (docId == 'general' && isValidGeneralSettings(incoming()) && incoming().diff(existing()).affectedKeys().hasOnly(['currency', 'language', 'target', 'autoRefreshOnOpen', 'onboardingCompleted', 'khumsEnabled', 'monthlyFixedExpenses', 'updatedAt'])) ||
+            (docId == 'subscription' && isValidSubscriptionSettings(incoming()) && existing().plan != 'pro' && incoming().diff(existing()).affectedKeys().hasOnly(['plan', 'paidAmountUsd', 'paymentProvider', 'paymentRef', 'payerHint', 'paidAt', 'updatedAt'])) ||
+            (docId == 'khumsTax' && isValidKhumsTaxSettings(incoming()) && incoming().diff(existing()).affectedKeys().hasOnly([
+              'khumsYearDate', 'khumsMethod', 'khumsBankCash', 'khumsHandCash',
+              'khumsPortfolioValue', 'khumsConsumablesValue', 'khumsReceivables',
+              'khumsPriorPaidBasis', 'khumsExemptReceipts', 'khumsMaunahDebt',
+              'khumsAnnualNetIncome', 'khumsAnnualMaunahExpense',
+              'traPayFrequency', 'traEmploymentMode', 'traGrossPay', 'traNssfRatePct',
+              'traSecondaryIncomeAnnual', 'traDseDividendsAnnual', 'traUnlistedDividendsAnnual',
+              'traDseCapitalGainsAnnual', 'traDseBelow25Pct', 'traUnlistedCapitalGainsAnnual',
+              'traRentalInterestAnnual', 'updatedAt'
+            ]))
+          )
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time;
+        allow delete: if false;
+      }
+    }
+
+    match /test/connection {
+      allow get: if isSignedInVerified();
+      allow list, write: if false;
+    }
+  }
+}

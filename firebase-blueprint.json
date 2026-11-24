@@ -1,0 +1,275 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Private profile and preferences for an authenticated FinanceDesk user.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 5,
+          "maxLength": 254
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "preferredCurrency": {
+          "type": "string",
+          "enum": ["TZS"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "preferredCurrency", "createdAt", "updatedAt"]
+    },
+    "HoldingItem": {
+      "title": "HoldingItem",
+      "description": "Portfolio stock, ETF, bond, or UTT AMIS fund holding owned by a FinanceDesk user.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "localId": { "type": "number" },
+        "symbol": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "kind": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "units": { "type": "number" },
+        "cost": { "type": "number" },
+        "price": { "type": "number" },
+        "updated": { "type": "string", "maxLength": 64 },
+        "date": { "type": "string", "maxLength": 20 },
+        "source": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "url": { "type": "string", "maxLength": 500 },
+        "selector": { "type": "string", "maxLength": 200 },
+        "regex": { "type": "string", "maxLength": 200 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "localId", "symbol", "kind", "units", "cost", "price", "source", "createdAt", "updatedAt"]
+    },
+    "BalanceItem": {
+      "title": "BalanceItem",
+      "description": "Current or long-term asset/liability entry owned by a FinanceDesk user.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "localId": { "type": "number" },
+        "section": { "type": "string", "enum": ["current_asset", "current_liability", "longterm_asset", "longterm_liability"] },
+        "name": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "amount": { "type": "number" },
+        "date": { "type": "string", "maxLength": 20 },
+        "type": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "localId", "section", "name", "amount", "date", "type", "createdAt", "updatedAt"]
+    },
+    "TransactionItem": {
+      "title": "TransactionItem",
+      "description": "Cash flow ledger transaction entry owned by a FinanceDesk user.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "localId": { "type": "number" },
+        "date": { "type": "string", "maxLength": 20 },
+        "activity": { "type": "string", "enum": ["operating", "investing", "financing"] },
+        "category": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "description": { "type": "string", "maxLength": 300 },
+        "amount": { "type": "number" },
+        "receiptId": { "type": "string", "maxLength": 80 },
+        "receiptName": { "type": "string", "maxLength": 200 },
+        "receiptMime": { "type": "string", "maxLength": 80 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "localId", "date", "activity", "category", "description", "amount", "receiptId", "receiptName", "receiptMime", "createdAt", "updatedAt"]
+    },
+    "IndicatorItem": {
+      "title": "IndicatorItem",
+      "description": "Market benchmark indicator configuration owned by a FinanceDesk user.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "localId": { "type": "number" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "url": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "selector": { "type": "string", "maxLength": 200 },
+        "regex": { "type": "string", "maxLength": 200 },
+        "value": { "type": "string", "maxLength": 80 },
+        "updated": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "localId", "name", "url", "createdAt", "updatedAt"]
+    },
+    "GeneralSettings": {
+      "title": "GeneralSettings",
+      "description": "User target net worth, language preference, onboarding status, Khums toggle, fixed monthly expenses template, and auto-refresh configuration.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "currency": { "type": "string", "enum": ["TZS"] },
+        "language": { "type": "string", "enum": ["en", "sw"] },
+        "target": { "type": "number" },
+        "autoRefreshOnOpen": { "type": "boolean" },
+        "onboardingCompleted": { "type": "boolean" },
+        "khumsEnabled": { "type": "boolean" },
+        "monthlyFixedExpenses": {
+          "type": "array",
+          "description": "Bounded list (max 25) of monthly fixed expense defaults with TZS amounts."
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "currency", "target", "autoRefreshOnOpen", "onboardingCompleted", "khumsEnabled", "monthlyFixedExpenses", "createdAt", "updatedAt"]
+    },
+    "SubscriptionSettings": {
+      "title": "SubscriptionSettings",
+      "description": "Per-user FinanceDesk freemium/Pro ($5) subscription record.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "plan": { "type": "string", "enum": ["free", "pro"] },
+        "paidAmountUsd": { "type": "number" },
+        "paymentProvider": { "type": "string", "enum": ["none", "stripe", "mobile_money", "card_preview", "qr_whatsapp", "admin_manual"] },
+        "paymentRef": { "type": "string", "maxLength": 120 },
+        "payerHint": { "type": "string", "maxLength": 80 },
+        "paidAt": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "plan", "paidAmountUsd", "paymentProvider", "paymentRef", "payerHint", "paidAt", "createdAt", "updatedAt"]
+    },
+    "KhumsTaxSettings": {
+      "title": "KhumsTaxSettings",
+      "description": "Saved Khums (Sistani) and Tanzania TRA Tax calculator inputs.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "khumsYearDate": { "type": "string", "maxLength": 20 },
+        "khumsMethod": { "type": "string", "enum": ["wealth", "income_flow"] },
+        "khumsBankCash": { "type": "number" },
+        "khumsHandCash": { "type": "number" },
+        "khumsPortfolioValue": { "type": "number" },
+        "khumsConsumablesValue": { "type": "number" },
+        "khumsReceivables": { "type": "number" },
+        "khumsPriorPaidBasis": { "type": "number" },
+        "khumsExemptReceipts": { "type": "number" },
+        "khumsMaunahDebt": { "type": "number" },
+        "khumsAnnualNetIncome": { "type": "number" },
+        "khumsAnnualMaunahExpense": { "type": "number" },
+        "traPayFrequency": { "type": "string", "enum": ["monthly", "annual"] },
+        "traEmploymentMode": { "type": "string", "enum": ["resident_primary", "resident_secondary", "non_resident"] },
+        "traGrossPay": { "type": "number" },
+        "traNssfRatePct": { "type": "number" },
+        "traSecondaryIncomeAnnual": { "type": "number" },
+        "traDseDividendsAnnual": { "type": "number" },
+        "traUnlistedDividendsAnnual": { "type": "number" },
+        "traDseCapitalGainsAnnual": { "type": "number" },
+        "traDseBelow25Pct": { "type": "boolean" },
+        "traUnlistedCapitalGainsAnnual": { "type": "number" },
+        "traRentalInterestAnnual": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "khumsYearDate", "khumsMethod", "traPayFrequency", "traEmploymentMode", "traDseBelow25Pct", "createdAt", "updatedAt"]
+    },
+    "ConnectionCheck": {
+      "title": "ConnectionCheck",
+      "description": "Server-only connection check document for Firestore reachability.",
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "maxLength": 32
+        }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Per-user private FinanceDesk profile document."
+    },
+    "/users/{userId}/holdings/{itemId}": {
+      "schema": { "$ref": "#/entities/HoldingItem" },
+      "description": "Per-user synced stock, ETF, and UTT AMIS holding records."
+    },
+    "/users/{userId}/balances/{itemId}": {
+      "schema": { "$ref": "#/entities/BalanceItem" },
+      "description": "Per-user synced current and long-term balance sheet entries."
+    },
+    "/users/{userId}/transactions/{itemId}": {
+      "schema": { "$ref": "#/entities/TransactionItem" },
+      "description": "Per-user synced cash flow ledger transactions."
+    },
+    "/users/{userId}/indicators/{itemId}": {
+      "schema": { "$ref": "#/entities/IndicatorItem" },
+      "description": "Per-user synced market indicator entries."
+    },
+    "/users/{userId}/appSettings/general": {
+      "schema": { "$ref": "#/entities/GeneralSettings" },
+      "description": "Per-user target net worth, language preference, and auto-refresh preferences."
+    },
+    "/users/{userId}/appSettings/subscription": {
+      "schema": { "$ref": "#/entities/SubscriptionSettings" },
+      "description": "Per-user FinanceDesk Pro ($5) subscription record."
+    },
+    "/users/{userId}/appSettings/khumsTax": {
+      "schema": { "$ref": "#/entities/KhumsTaxSettings" },
+      "description": "Per-user Khums and Tanzania TRA calculator state."
+    },
+    "/test/{docId}": {
+      "schema": { "$ref": "#/entities/ConnectionCheck" },
+      "description": "Connectivity verification document."
+    }
+  }
+}
