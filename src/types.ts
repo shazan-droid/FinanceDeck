@@ -137,7 +137,7 @@ export type PaymentProvider =
   | 'card_preview'
   | 'qr_whatsapp'
   | 'admin_manual';
-export type PaymentClaimStatus = 'none' | 'pending_verification' | 'paid';
+export type PaymentClaimStatus = 'none' | 'pending_verification' | 'paid' | 'expired';
 
 export interface SubscriptionInfo {
   plan: PlanTier;
@@ -146,6 +146,8 @@ export interface SubscriptionInfo {
   paymentRef: string;
   payerHint: string;
   paidAt: string;
+  expiresAt?: string;
+  daysRemaining?: number | null;
   claimStatus?: PaymentClaimStatus;
   claimUsername?: string;
   claimNote?: string;
@@ -177,6 +179,8 @@ export interface AdminUserRecord {
   claimNote: string;
   claimedAt: string;
   paidAt: string;
+  expiresAt: string;
+  daysRemaining: number | null;
   lastSeenAt: string;
   createdAt: string;
 }

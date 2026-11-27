@@ -738,6 +738,27 @@ export default function App() {
     [requestJson, currentUser?.email, applyAndSyncState]
   );
 
+  const extendAdminUserPlan = useCallback(
+    async (payload: { email: string; days: number; note?: string }) => {
+      const res = await requestJson<{ ok: boolean; users: AdminUserRecord[] }>(
+        '/api/admin/users/extend',
+        {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        }
+      );
+      if (
+        currentUser?.email &&
+        payload.email.trim().toLowerCase() === currentUser.email.trim().toLowerCase()
+      ) {
+        const refreshed = await requestJson<FinanceState>('/api/state');
+        applyAndSyncState(refreshed);
+      }
+      return res.users;
+    },
+    [requestJson, currentUser?.email, applyAndSyncState]
+  );
+
   const authorizeReport = useCallback(async (): Promise<boolean> => {
     try {
       await requestJson<{ ok: boolean }>('/api/reports/authorize', { method: 'POST' });
@@ -1243,9 +1264,19 @@ export default function App() {
               </button>
             )}
             {state && isPro && (
-              <span className="hidden items-center gap-1 rounded border border-emerald-800/70 bg-emerald-950/35 px-2 py-1 text-[11px] font-semibold tracking-wider text-emerald-300 sm:inline-flex">
+              <span
+                title={
+                  state.settings.subscription?.expiresAt
+                    ? `${t.adminExpiresPrefix} ${state.settings.subscription.expiresAt.slice(0, 10)}`
+                    : undefined
+                }
+                className="font-mono-nums hidden items-center gap-1 rounded border border-emerald-800/70 bg-emerald-950/35 px-2 py-1 text-[11px] font-semibold tracking-wider text-emerald-300 sm:inline-flex"
+              >
                 <Crown className="h-3 w-3" />
                 {t.proBadge}
+                {typeof state.settings.subscription?.daysRemaining === 'number'
+                  ? ` · ${state.settings.subscription.daysRemaining}d`
+                  : ''}
               </span>
             )}
             {!showOnboarding && (
@@ -1431,6 +1462,7 @@ export default function App() {
                 onDeleteQrImage={deleteAdminQrImage}
                 onSaveBillingConfig={saveAdminBillingConfig}
                 onSetUserPlan={setAdminUserPlan}
+                onExtendUserPlan={extendAdminUserPlan}
               />
             )}
           </>

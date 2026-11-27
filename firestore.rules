@@ -208,7 +208,7 @@ service cloud.firestore {
 
     function isValidSubscriptionSettings(data) {
       return data.keys().hasAll(['ownerUid', 'plan', 'paidAmountUsd', 'paymentProvider', 'paymentRef', 'payerHint', 'paidAt', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['ownerUid', 'plan', 'paidAmountUsd', 'paymentProvider', 'paymentRef', 'payerHint', 'paidAt', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerUid', 'plan', 'paidAmountUsd', 'paymentProvider', 'paymentRef', 'payerHint', 'paidAt', 'expiresAt', 'createdAt', 'updatedAt'])
         && data.ownerUid is string
         && data.ownerUid.size() >= 1
         && data.ownerUid.size() <= 128
@@ -226,6 +226,7 @@ service cloud.firestore {
         && data.payerHint.size() <= 80
         && data.paidAt is string
         && data.paidAt.size() <= 40
+        && (!('expiresAt' in data) || (data.expiresAt is string && data.expiresAt.size() <= 40))
         && (data.plan == 'free' || (data.paidAmountUsd >= 5 && data.paymentProvider != 'none' && data.paymentRef.size() >= 6 && data.paidAt.size() >= 8))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -394,7 +395,7 @@ service cloud.firestore {
         allow update: if isOwnerUserDoc(userId)
           && (
             (docId == 'general' && isValidGeneralSettings(incoming()) && incoming().diff(existing()).affectedKeys().hasOnly(['currency', 'language', 'target', 'autoRefreshOnOpen', 'onboardingCompleted', 'khumsEnabled', 'monthlyFixedExpenses', 'updatedAt'])) ||
-            (docId == 'subscription' && isValidSubscriptionSettings(incoming()) && existing().plan != 'pro' && incoming().diff(existing()).affectedKeys().hasOnly(['plan', 'paidAmountUsd', 'paymentProvider', 'paymentRef', 'payerHint', 'paidAt', 'updatedAt'])) ||
+            (docId == 'subscription' && isValidSubscriptionSettings(incoming()) && (existing().plan != 'pro' || incoming().plan == 'free') && incoming().diff(existing()).affectedKeys().hasOnly(['plan', 'paidAmountUsd', 'paymentProvider', 'paymentRef', 'payerHint', 'paidAt', 'expiresAt', 'updatedAt'])) ||
             (docId == 'khumsTax' && isValidKhumsTaxSettings(incoming()) && incoming().diff(existing()).affectedKeys().hasOnly([
               'khumsYearDate', 'khumsMethod', 'khumsBankCash', 'khumsHandCash',
               'khumsPortfolioValue', 'khumsConsumablesValue', 'khumsReceivables',

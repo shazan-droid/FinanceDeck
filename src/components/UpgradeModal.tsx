@@ -151,10 +151,30 @@ export function UpgradeModal({
 
   const isPendingVerification =
     claimRecorded || subscription?.claimStatus === 'pending_verification';
+  const isExpired = !isPendingVerification && subscription?.claimStatus === 'expired';
+  const expiredDate = subscription?.expiresAt ? subscription.expiresAt.slice(0, 10) : '';
 
   return (
     <Modal open={open} title={t.upgradeTitle} onClose={onClose} size="md">
       <div className="space-y-4">
+        {isExpired && (
+          <div
+            role="status"
+            className="flex items-start gap-2.5 rounded-md border border-rose-800/60 bg-rose-950/35 px-3.5 py-2.5 text-xs text-rose-200"
+          >
+            <Clock className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
+            <div>
+              <p className="font-semibold text-rose-100">
+                {t.expiredTitle}
+                {expiredDate ? ` (${expiredDate})` : ''}
+              </p>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-rose-200/90">
+                {t.expiredBody}
+              </p>
+            </div>
+          </div>
+        )}
+
         <div className="rounded-lg border border-[#2A2A2A] bg-[#0B0B0B] p-4">
           <div className="flex items-start justify-between gap-3">
             <div>

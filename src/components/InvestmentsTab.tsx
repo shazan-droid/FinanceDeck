@@ -978,6 +978,12 @@ export function InvestmentsTab({
                 <option value="PAL" />
                 <option value="DCB" />
                 <option value="AFRIPRISE" />
+                <option value="IEACLC-ETF" />
+                <option value="VERTEX-ETF" />
+                <option value="ZAN TIMIZA ETF" />
+                <option value="TCCL" />
+                <option value="SWIS" />
+                <option value="NICO" />
                 <option value="UTT AMIS Liquid Fund" />
                 <option value="UTT AMIS Umoja Fund" />
                 <option value="UTT AMIS Bond Fund" />

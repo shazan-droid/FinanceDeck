@@ -254,8 +254,14 @@ export async function loadStateFromFirestore(user: User): Promise<FirestoreResto
           providerRaw === 'admin_manual'
             ? providerRaw
             : 'none';
+        const rawExpiresAt = String(s.expiresAt || '');
+        const parsedExpMs = rawExpiresAt ? Date.parse(rawExpiresAt) : NaN;
+        const isExpired = Number.isFinite(parsedExpMs) && parsedExpMs <= Date.now();
         const plan: PlanTier =
-          s.plan === 'pro' && Number(s.paidAmountUsd || 0) >= 5 && String(s.paymentRef || '').length >= 6
+          !isExpired &&
+          s.plan === 'pro' &&
+          Number(s.paidAmountUsd || 0) >= 5 &&
+          String(s.paymentRef || '').length >= 6
             ? 'pro'
             : 'free';
         restoredSubscription = {
@@ -265,6 +271,7 @@ export async function loadStateFromFirestore(user: User): Promise<FirestoreResto
           paymentRef: String(s.paymentRef || ''),
           payerHint: String(s.payerHint || ''),
           paidAt: String(s.paidAt || ''),
+          expiresAt: rawExpiresAt,
         };
       }
     } catch {
@@ -524,6 +531,7 @@ export async function syncStateToFirestore(user: User, state: FinanceState): Pro
         paymentRef: clip(subInfo.paymentRef, 120),
         payerHint: clip(subInfo.payerHint, 80),
         paidAt: clip(subInfo.paidAt, 40),
+        expiresAt: clip(subInfo.expiresAt, 40),
       };
 
       if (!subExists) {
@@ -533,7 +541,10 @@ export async function syncStateToFirestore(user: User, state: FinanceState): Pro
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
-      } else if (existingPlan !== 'pro' && subPayload.plan === 'pro') {
+      } else if (
+        (existingPlan !== 'pro' && subPayload.plan === 'pro') ||
+        (existingPlan === 'pro' && subPayload.plan === 'free')
+      ) {
         await updateDoc(subRef, { ...subPayload, updatedAt: serverTimestamp() });
       }
     }

@@ -178,6 +178,7 @@
         "paymentRef": { "type": "string", "maxLength": 120 },
         "payerHint": { "type": "string", "maxLength": 80 },
         "paidAt": { "type": "string", "maxLength": 40 },
+        "expiresAt": { "type": "string", "maxLength": 40 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },

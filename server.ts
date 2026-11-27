@@ -16,6 +16,8 @@ dotenv.config();
 const PORT = Number(process.env.PORT || 3000);
 const LEGACY_OWNER_EMAIL = 'syedshazanrizvi@gmail.com';
 const DEFAULT_WHATSAPP_NUMBER = '255676252116';
+const MEMBERSHIP_DURATION_DAYS = 30;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const ADMIN_EMAIL_SET = new Set<string>(
   [LEGACY_OWNER_EMAIL, ...(process.env.ADMIN_EMAILS || '').split(',')]
     .map((e) => e.trim().toLowerCase())
@@ -24,6 +26,7 @@ const ADMIN_EMAIL_SET = new Set<string>(
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const USERS_DATA_DIR = path.join(DATA_DIR, 'users');
 const PLATFORM_DB_PATH = path.join(DATA_DIR, 'platform.db');
+const MEMBERS_DB_PATH = path.join(DATA_DIR, 'members.db');
 const PLATFORM_QR_DIR = path.join(DATA_DIR, 'platform-qr');
 const LEGACY_DB_PATH = path.join(DATA_DIR, 'financedesk.db');
 const LEGACY_RECEIPTS_DIR = path.join(DATA_DIR, 'receipts');
@@ -88,6 +91,22 @@ function isValidUid(uid: string): boolean {
 const userDbCache = new Map<string, DatabaseSync>();
 const dbToEmailMap = new WeakMap<DatabaseSync, string>();
 let platformDbInstance: DatabaseSync | null = null;
+let membersDbInstance: DatabaseSync | null = null;
+
+function addDaysIso(base: string | Date, days: number): string {
+  const baseMs = typeof base === 'string' ? Date.parse(base) : base.getTime();
+  const startMs = Number.isFinite(baseMs) ? baseMs : Date.now();
+  return new Date(startMs + days * MS_PER_DAY).toISOString();
+}
+
+function computeDaysRemaining(expiresAt: string): number | null {
+  if (!expiresAt) return null;
+  const ms = Date.parse(expiresAt);
+  if (!Number.isFinite(ms)) return null;
+  const diff = ms - Date.now();
+  if (diff <= 0) return 0;
+  return Math.ceil(diff / MS_PER_DAY);
+}
 
 function getPlatformDb(): DatabaseSync {
   if (platformDbInstance) return platformDbInstance;
@@ -99,22 +118,6 @@ function getPlatformDb(): DatabaseSync {
       k TEXT PRIMARY KEY,
       v TEXT NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS platform_users (
-      email TEXT PRIMARY KEY,
-      uid TEXT NOT NULL DEFAULT '',
-      display_name TEXT NOT NULL DEFAULT '',
-      plan TEXT NOT NULL DEFAULT 'free',
-      payment_status TEXT NOT NULL DEFAULT 'none',
-      payment_provider TEXT NOT NULL DEFAULT 'none',
-      payment_ref TEXT NOT NULL DEFAULT '',
-      payer_hint TEXT NOT NULL DEFAULT '',
-      claim_username TEXT NOT NULL DEFAULT '',
-      claim_note TEXT NOT NULL DEFAULT '',
-      claimed_at TEXT NOT NULL DEFAULT '',
-      paid_at TEXT NOT NULL DEFAULT '',
-      last_seen_at TEXT NOT NULL DEFAULT '',
-      created_at TEXT NOT NULL DEFAULT ''
-    );
   `);
   const initCfg = pdb.prepare('INSERT OR IGNORE INTO platform_config (k, v) VALUES (?, ?)');
   initCfg.run('whatsappNumber', DEFAULT_WHATSAPP_NUMBER);
@@ -124,6 +127,159 @@ function getPlatformDb(): DatabaseSync {
   initCfg.run('qrUpdatedAt', '');
   platformDbInstance = pdb;
   return pdb;
+}
+
+interface MemberSqlRow {
+  email: string;
+  uid: string;
+  display_name: string;
+  membership_status: string;
+  payment_status: string;
+  payment_provider: string;
+  payment_ref: string;
+  payer_hint: string;
+  claim_username: string;
+  claim_note: string;
+  claimed_at: string;
+  paid_at: string;
+  expires_at: string;
+  last_seen_at: string;
+  created_at: string;
+}
+
+// Dedicated SQL database for essential member records & membership status only (no financial data)
+function getMembersDb(): DatabaseSync {
+  if (membersDbInstance) return membersDbInstance;
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const mdb = new DatabaseSync(MEMBERS_DB_PATH);
+  mdb.exec(`
+    CREATE TABLE IF NOT EXISTS members (
+      email TEXT PRIMARY KEY,
+      uid TEXT NOT NULL DEFAULT '',
+      display_name TEXT NOT NULL DEFAULT '',
+      membership_status TEXT NOT NULL DEFAULT 'free',
+      payment_status TEXT NOT NULL DEFAULT 'none',
+      payment_provider TEXT NOT NULL DEFAULT 'none',
+      payment_ref TEXT NOT NULL DEFAULT '',
+      payer_hint TEXT NOT NULL DEFAULT '',
+      claim_username TEXT NOT NULL DEFAULT '',
+      claim_note TEXT NOT NULL DEFAULT '',
+      claimed_at TEXT NOT NULL DEFAULT '',
+      paid_at TEXT NOT NULL DEFAULT '',
+      expires_at TEXT NOT NULL DEFAULT '',
+      last_seen_at TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT ''
+    );
+  `);
+  ensureColumn(mdb, 'members', 'expires_at', "TEXT NOT NULL DEFAULT ''");
+
+  // One-time migration of any existing legacy platform_users rows into dedicated members.db
+  try {
+    const pdb = getPlatformDb();
+    const hasLegacyTable = pdb
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'platform_users'")
+      .get() as { name: string } | undefined;
+    if (hasLegacyTable) {
+      const legacyRows = pdb
+        .prepare(
+          `SELECT email, uid, display_name, plan, payment_status, payment_provider, payment_ref, payer_hint,
+                  claim_username, claim_note, claimed_at, paid_at, last_seen_at, created_at
+           FROM platform_users`
+        )
+        .all() as Array<{
+        email: string;
+        uid: string;
+        display_name: string;
+        plan: string;
+        payment_status: string;
+        payment_provider: string;
+        payment_ref: string;
+        payer_hint: string;
+        claim_username: string;
+        claim_note: string;
+        claimed_at: string;
+        paid_at: string;
+        last_seen_at: string;
+        created_at: string;
+      }>;
+      const insertMember = mdb.prepare(
+        `INSERT OR IGNORE INTO members (
+           email, uid, display_name, membership_status, payment_status, payment_provider, payment_ref,
+           payer_hint, claim_username, claim_note, claimed_at, paid_at, expires_at, last_seen_at, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      for (const r of legacyRows) {
+        const isPro = r.plan === 'pro';
+        const paidAt = r.paid_at || (isPro ? r.created_at || new Date().toISOString() : '');
+        const expiresAt = isPro ? addDaysIso(paidAt, MEMBERSHIP_DURATION_DAYS) : '';
+        insertMember.run(
+          String(r.email || '').trim().toLowerCase(),
+          r.uid || '',
+          r.display_name || '',
+          isPro ? 'pro' : 'free',
+          r.payment_status || (isPro ? 'paid' : 'none'),
+          r.payment_provider || 'none',
+          r.payment_ref || '',
+          r.payer_hint || '',
+          r.claim_username || '',
+          r.claim_note || '',
+          r.claimed_at || '',
+          paidAt,
+          expiresAt,
+          r.last_seen_at || '',
+          r.created_at || new Date().toISOString()
+        );
+      }
+    }
+  } catch {
+    // Non-fatal if no legacy table exists
+  }
+
+  membersDbInstance = mdb;
+  return mdb;
+}
+
+function enforceMemberExpiryRow(mdb: DatabaseSync, row: MemberSqlRow): MemberSqlRow {
+  if (row.membership_status !== 'pro') return row;
+  const fallbackBase = row.paid_at || row.created_at || new Date().toISOString();
+  const effectiveExpiresAt =
+    row.expires_at && Number.isFinite(Date.parse(row.expires_at))
+      ? row.expires_at
+      : addDaysIso(fallbackBase, MEMBERSHIP_DURATION_DAYS);
+
+  if (effectiveExpiresAt !== row.expires_at) {
+    mdb
+      .prepare('UPDATE members SET expires_at = ? WHERE LOWER(email) = ?')
+      .run(effectiveExpiresAt, row.email.toLowerCase());
+  }
+
+  const expiresMs = Date.parse(effectiveExpiresAt);
+  if (Number.isFinite(expiresMs) && Date.now() >= expiresMs) {
+    mdb
+      .prepare(
+        `UPDATE members
+         SET membership_status = 'free',
+             payment_status = 'expired'
+         WHERE LOWER(email) = ?`
+      )
+      .run(row.email.toLowerCase());
+    return {
+      ...row,
+      membership_status: 'free',
+      payment_status: 'expired',
+      expires_at: effectiveExpiresAt,
+    };
+  }
+  return { ...row, expires_at: effectiveExpiresAt };
+}
+
+function sweepExpiredMembers(mdb = getMembersDb()): void {
+  const proRows = mdb
+    .prepare("SELECT * FROM members WHERE membership_status = 'pro'")
+    .all() as unknown as MemberSqlRow[];
+  for (const row of proRows) {
+    enforceMemberExpiryRow(mdb, row);
+  }
 }
 
 function getPlatformBillingConfig() {
@@ -148,23 +304,6 @@ function getPlatformBillingConfig() {
   };
 }
 
-interface PlatformUserRow {
-  email: string;
-  uid: string;
-  display_name: string;
-  plan: string;
-  payment_status: string;
-  payment_provider: string;
-  payment_ref: string;
-  payer_hint: string;
-  claim_username: string;
-  claim_note: string;
-  claimed_at: string;
-  paid_at: string;
-  last_seen_at: string;
-  created_at: string;
-}
-
 function safeResolveQrPath(filename: string): string | null {
   const clean = filename.trim();
   if (!/^[a-zA-Z0-9._-]+$/.test(clean) || clean.includes('..')) {
@@ -178,42 +317,51 @@ function safeResolveQrPath(filename: string): string | null {
 }
 
 function listAdminUserRecords() {
-  const pdb = getPlatformDb();
-  const rows = pdb
+  const mdb = getMembersDb();
+  sweepExpiredMembers(mdb);
+  const rows = mdb
     .prepare(
-      `SELECT email, uid, display_name, plan, payment_status, payment_provider, payment_ref, payer_hint,
-              claim_username, claim_note, claimed_at, paid_at, last_seen_at, created_at
-       FROM platform_users
+      `SELECT email, uid, display_name, membership_status, payment_status, payment_provider, payment_ref, payer_hint,
+              claim_username, claim_note, claimed_at, paid_at, expires_at, last_seen_at, created_at
+       FROM members
        ORDER BY
-         CASE payment_status WHEN 'pending_verification' THEN 0 WHEN 'paid' THEN 1 ELSE 2 END ASC,
+         CASE payment_status WHEN 'pending_verification' THEN 0 WHEN 'paid' THEN 1 WHEN 'expired' THEN 2 ELSE 3 END ASC,
          COALESCE(NULLIF(claimed_at, ''), NULLIF(last_seen_at, ''), created_at) DESC,
          email ASC`
     )
-    .all() as unknown as PlatformUserRow[];
+    .all() as unknown as MemberSqlRow[];
 
-  return rows.map((r) => ({
-    email: r.email,
-    uid: r.uid,
-    displayName: r.display_name,
-    plan: (r.plan === 'pro' ? 'pro' : 'free') as PlanTier,
-    paymentStatus: (
-      r.payment_status === 'pending_verification' || r.payment_status === 'paid'
-        ? r.payment_status
-        : 'none'
-    ) as PaymentClaimStatus,
-    paymentProvider: sanitizeProvider(r.payment_provider),
-    paymentRef: r.payment_ref,
-    payerHint: r.payer_hint,
-    claimUsername: r.claim_username,
-    claimNote: r.claim_note,
-    claimedAt: r.claimed_at,
-    paidAt: r.paid_at,
-    lastSeenAt: r.last_seen_at,
-    createdAt: r.created_at,
-  }));
+  return rows.map((r) => {
+    const isPro = r.membership_status === 'pro';
+    const paymentStatus: PaymentClaimStatus = isPro
+      ? 'paid'
+      : r.payment_status === 'pending_verification'
+        ? 'pending_verification'
+        : r.payment_status === 'expired'
+          ? 'expired'
+          : 'none';
+    return {
+      email: r.email,
+      uid: r.uid,
+      displayName: r.display_name,
+      plan: (isPro ? 'pro' : 'free') as PlanTier,
+      paymentStatus,
+      paymentProvider: sanitizeProvider(r.payment_provider),
+      paymentRef: r.payment_ref,
+      payerHint: r.payer_hint,
+      claimUsername: r.claim_username,
+      claimNote: r.claim_note,
+      claimedAt: r.claimed_at,
+      paidAt: r.paid_at,
+      expiresAt: r.expires_at,
+      daysRemaining: isPro ? computeDaysRemaining(r.expires_at) : 0,
+      lastSeenAt: r.last_seen_at,
+      createdAt: r.created_at,
+    };
+  });
 }
 
-function syncPlatformUserOnAuth(
+function syncMemberOnAuth(
   uid: string,
   email: string,
   displayName: string,
@@ -221,14 +369,13 @@ function syncPlatformUserOnAuth(
 ): void {
   const normEmail = email.trim().toLowerCase();
   if (!normEmail) return;
-  const pdb = getPlatformDb();
+  const mdb = getMembersDb();
   const now = new Date().toISOString();
-  const existing = pdb
-    .prepare('SELECT * FROM platform_users WHERE LOWER(email) = ?')
-    .get(normEmail) as PlatformUserRow | undefined;
+  const existing = mdb
+    .prepare('SELECT * FROM members WHERE LOWER(email) = ?')
+    .get(normEmail) as MemberSqlRow | undefined;
 
   if (!existing) {
-    // Seed initial plan from existing local DB if migrating an active user
     const localSubRow = userDb
       .prepare("SELECT v FROM settings WHERE k = 'subscriptionJson'")
       .get() as { v: string } | undefined;
@@ -241,39 +388,44 @@ function syncPlatformUserOnAuth(
       }
     }
     const isPro = localSub.plan === 'pro';
-    pdb
+    const paidAt = isPro ? localSub.paidAt || now : '';
+    const expiresAt = isPro ? localSub.expiresAt || addDaysIso(paidAt, MEMBERSHIP_DURATION_DAYS) : '';
+    const stillActive = isPro && (!expiresAt || Date.parse(expiresAt) > Date.now());
+    mdb
       .prepare(
-        `INSERT INTO platform_users (
-           email, uid, display_name, plan, payment_status, payment_provider, payment_ref,
-           payer_hint, claim_username, claim_note, claimed_at, paid_at, last_seen_at, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO members (
+           email, uid, display_name, membership_status, payment_status, payment_provider, payment_ref,
+           payer_hint, claim_username, claim_note, claimed_at, paid_at, expires_at, last_seen_at, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         normEmail,
         uid,
         displayName.slice(0, 120),
-        isPro ? 'pro' : 'free',
-        isPro ? 'paid' : 'none',
+        stillActive ? 'pro' : 'free',
+        stillActive ? 'paid' : isPro ? 'expired' : 'none',
         localSub.paymentProvider,
         localSub.paymentRef,
         localSub.payerHint,
         '',
         '',
         '',
-        localSub.paidAt,
+        paidAt,
+        expiresAt,
         now,
         now
       );
   } else {
-    pdb
+    mdb
       .prepare(
-        `UPDATE platform_users
+        `UPDATE members
          SET uid = COALESCE(NULLIF(?, ''), uid),
              display_name = CASE WHEN ? != '' THEN ? ELSE display_name END,
              last_seen_at = ?
          WHERE LOWER(email) = ?`
       )
       .run(uid, displayName.slice(0, 120), displayName.slice(0, 120), now, normEmail);
+    enforceMemberExpiryRow(mdb, existing);
   }
 }
 
@@ -332,7 +484,7 @@ function getOrCreateUserContext(uid: string, email: string, displayName = ''): U
     userDbCache.set(uid, dbInstance);
   }
   dbToEmailMap.set(dbInstance, normEmail);
-  syncPlatformUserOnAuth(uid, normEmail, displayName, dbInstance);
+  syncMemberOnAuth(uid, normEmail, displayName, dbInstance);
   return {
     uid,
     email: normEmail,
@@ -475,7 +627,7 @@ type PaymentProvider =
   | 'card_preview'
   | 'qr_whatsapp'
   | 'admin_manual';
-type PaymentClaimStatus = 'none' | 'pending_verification' | 'paid';
+type PaymentClaimStatus = 'none' | 'pending_verification' | 'paid' | 'expired';
 
 interface SubscriptionRecord {
   plan: PlanTier;
@@ -484,6 +636,8 @@ interface SubscriptionRecord {
   paymentRef: string;
   payerHint: string;
   paidAt: string;
+  expiresAt: string;
+  daysRemaining: number | null;
   claimStatus: PaymentClaimStatus;
   claimUsername: string;
   claimNote: string;
@@ -497,6 +651,8 @@ const DEFAULT_SUBSCRIPTION: SubscriptionRecord = {
   paymentRef: '',
   payerHint: '',
   paidAt: '',
+  expiresAt: '',
+  daysRemaining: null,
   claimStatus: 'none',
   claimUsername: '',
   claimNote: '',
@@ -529,22 +685,29 @@ function sanitizeSubscription(raw: unknown): SubscriptionRecord {
   const paymentRef = String(rec.paymentRef || '').trim().slice(0, 80);
   const payerHint = String(rec.payerHint || '').trim().slice(0, 60);
   const paidAt = String(rec.paidAt || '').trim().slice(0, 64);
+  const expiresAt = String(rec.expiresAt || '').trim().slice(0, 64);
   const claimStatusRaw = String(rec.claimStatus || 'none');
   const claimStatus: PaymentClaimStatus =
-    claimStatusRaw === 'pending_verification' || claimStatusRaw === 'paid'
+    claimStatusRaw === 'pending_verification' ||
+    claimStatusRaw === 'paid' ||
+    claimStatusRaw === 'expired'
       ? claimStatusRaw
       : 'none';
   const claimUsername = String(rec.claimUsername || '').trim().slice(0, 100);
   const claimNote = String(rec.claimNote || '').trim().slice(0, 160);
   const claimedAt = String(rec.claimedAt || '').trim().slice(0, 64);
 
+  const isExpired = Boolean(expiresAt && Number.isFinite(Date.parse(expiresAt)) && Date.parse(expiresAt) <= Date.now());
+
   if (
+    !isExpired &&
     rec.plan === 'pro' &&
     Number.isFinite(paidAmountUsd) &&
     paidAmountUsd >= 5 &&
     paymentProvider !== 'none' &&
     paymentRef.length >= 6
   ) {
+    const resolvedExpiresAt = expiresAt || addDaysIso(paidAt || new Date().toISOString(), MEMBERSHIP_DURATION_DAYS);
     return {
       plan: 'pro',
       paidAmountUsd,
@@ -552,6 +715,8 @@ function sanitizeSubscription(raw: unknown): SubscriptionRecord {
       paymentRef,
       payerHint,
       paidAt: paidAt || new Date().toISOString(),
+      expiresAt: resolvedExpiresAt,
+      daysRemaining: computeDaysRemaining(resolvedExpiresAt),
       claimStatus: 'paid',
       claimUsername,
       claimNote,
@@ -560,7 +725,17 @@ function sanitizeSubscription(raw: unknown): SubscriptionRecord {
   }
   return {
     ...DEFAULT_SUBSCRIPTION,
-    claimStatus: claimStatus === 'pending_verification' ? 'pending_verification' : 'none',
+    paidAt: isExpired ? paidAt : '',
+    expiresAt: isExpired ? expiresAt : '',
+    daysRemaining: isExpired ? 0 : null,
+    claimStatus:
+      isExpired
+        ? 'expired'
+        : claimStatus === 'pending_verification'
+          ? 'pending_verification'
+          : claimStatus === 'expired'
+            ? 'expired'
+            : 'none',
     claimUsername,
     claimNote,
     claimedAt,
@@ -869,36 +1044,47 @@ function getSettings(database: DatabaseSync) {
 
   const userEmail = (dbToEmailMap.get(database) || map.get('accountEmail') || '').trim().toLowerCase();
   if (userEmail) {
-    const pdb = getPlatformDb();
-    const pRow = pdb
-      .prepare('SELECT * FROM platform_users WHERE LOWER(email) = ?')
-      .get(userEmail) as PlatformUserRow | undefined;
-    if (pRow) {
-      const isPro = pRow.plan === 'pro';
+    const mdb = getMembersDb();
+    const rawRow = mdb
+      .prepare('SELECT * FROM members WHERE LOWER(email) = ?')
+      .get(userEmail) as MemberSqlRow | undefined;
+    if (rawRow) {
+      const mRow = enforceMemberExpiryRow(mdb, rawRow);
+      const isPro = mRow.membership_status === 'pro';
       const pClaimStatus: PaymentClaimStatus = isPro
         ? 'paid'
-        : pRow.payment_status === 'pending_verification'
+        : mRow.payment_status === 'pending_verification'
           ? 'pending_verification'
-          : 'none';
+          : mRow.payment_status === 'expired'
+            ? 'expired'
+            : 'none';
       const syncedSub: SubscriptionRecord = isPro
         ? {
             plan: 'pro',
             paidAmountUsd: 5,
-            paymentProvider: sanitizeProvider(pRow.payment_provider) === 'none' ? 'admin_manual' : sanitizeProvider(pRow.payment_provider),
-            paymentRef: pRow.payment_ref || 'ADM-PRO',
-            payerHint: pRow.payer_hint || pRow.claim_username || userEmail,
-            paidAt: pRow.paid_at || new Date().toISOString(),
+            paymentProvider:
+              sanitizeProvider(mRow.payment_provider) === 'none'
+                ? 'admin_manual'
+                : sanitizeProvider(mRow.payment_provider),
+            paymentRef: mRow.payment_ref || 'ADM-PRO',
+            payerHint: mRow.payer_hint || mRow.claim_username || userEmail,
+            paidAt: mRow.paid_at || new Date().toISOString(),
+            expiresAt: mRow.expires_at,
+            daysRemaining: computeDaysRemaining(mRow.expires_at),
             claimStatus: 'paid',
-            claimUsername: pRow.claim_username,
-            claimNote: pRow.claim_note,
-            claimedAt: pRow.claimed_at,
+            claimUsername: mRow.claim_username,
+            claimNote: mRow.claim_note,
+            claimedAt: mRow.claimed_at,
           }
         : {
             ...DEFAULT_SUBSCRIPTION,
+            paidAt: mRow.payment_status === 'expired' ? mRow.paid_at : '',
+            expiresAt: mRow.payment_status === 'expired' ? mRow.expires_at : '',
+            daysRemaining: mRow.payment_status === 'expired' ? 0 : null,
             claimStatus: pClaimStatus,
-            claimUsername: pRow.claim_username,
-            claimNote: pRow.claim_note,
-            claimedAt: pRow.claimed_at,
+            claimUsername: mRow.claim_username,
+            claimNote: mRow.claim_note,
+            claimedAt: mRow.claimed_at,
           };
 
       const serialized = JSON.stringify(syncedSub);
@@ -1153,6 +1339,64 @@ function extractSpacedText(html: string, selector = 'body'): string {
 
 type BoardMap = Record<string, { price: number; change?: number; origin: string }>;
 
+const DSE_BOARD_CACHE_TTL_MS = 2 * 60 * 1000;
+let dseBoardCache: { board: BoardMap; ts: number } | null = null;
+
+function parseHisazanguStocksHtml(html: string, originLabel = 'Hisazangu DSE Feed'): BoardMap {
+  const board: BoardMap = {};
+  const $ = cheerio.load(html);
+
+  $('table tr').each((_, tr) => {
+    const tds = $(tr)
+      .find('td')
+      .map((__, td) => $(td).text().replace(/\s+/g, ' ').trim())
+      .get();
+    if (tds.length >= 4) {
+      const sym = tds[0].toUpperCase();
+      if (!/^[A-Z][A-Z0-9 .&-]{0,24}$/.test(sym) || sym === 'STOCK') return;
+      const priceMatch = tds[2].match(/^([\d,]+(?:\.\d+)?)/);
+      if (!priceMatch) return;
+      const price = parseNumber(priceMatch[1]);
+      if (price !== null && price > 0 && !board[sym]) {
+        const changeVal = parseNumber(tds[3]);
+        board[sym] = {
+          price,
+          change: changeVal !== null ? changeVal : undefined,
+          origin: originLabel,
+        };
+      }
+    }
+  });
+
+  return board;
+}
+
+function applyDseBoardAliases(board: BoardMap): void {
+  if (board['TCCL'] && !board['SIMBA']) {
+    board['SIMBA'] = { ...board['TCCL'] };
+  } else if (board['SIMBA'] && !board['TCCL']) {
+    board['TCCL'] = { ...board['SIMBA'] };
+  }
+  if (board['ZAN TIMIZA ETF'] && !board['ZAN-TIMIZA-ETF']) {
+    board['ZAN-TIMIZA-ETF'] = { ...board['ZAN TIMIZA ETF'] };
+  } else if (board['ZAN-TIMIZA-ETF'] && !board['ZAN TIMIZA ETF']) {
+    board['ZAN TIMIZA ETF'] = { ...board['ZAN-TIMIZA-ETF'] };
+  }
+  if (board['IEACLC-ETF'] && !board['IEACLC']) {
+    board['IEACLC'] = { ...board['IEACLC-ETF'] };
+  }
+}
+
+function lookupDseBoardHit(symbol: string, board: BoardMap) {
+  const clean = symbol.trim().toUpperCase();
+  if (!clean) return undefined;
+  return (
+    board[clean] ||
+    board[clean.replace(/\s+/g, '-')] ||
+    board[clean.replace(/-/g, ' ')]
+  );
+}
+
 function parseDseHtmlMultiStrategy(html: string, originLabel: string): BoardMap {
   const board: BoardMap = {};
   const $ = cheerio.load(html);
@@ -1193,58 +1437,101 @@ function parseDseHtmlMultiStrategy(html: string, originLabel: string): BoardMap 
   return board;
 }
 
-async function fetchDseBoard(): Promise<{ board: BoardMap; errors: string[] }> {
-  const board: BoardMap = {};
-  const errors: string[] = [];
+async function fetchDseBoard(forceRefresh = false): Promise<{ board: BoardMap; errors: string[] }> {
+  if (!forceRefresh && dseBoardCache && Date.now() - dseBoardCache.ts < DSE_BOARD_CACHE_TTL_MS) {
+    return { board: dseBoardCache.board, errors: [] };
+  }
 
-  const [jsonRes, allEqRes, homeRes] = await Promise.allSettled([
-    fetchWithTimeout('https://dse.co.tz/api/get/live/market/prices'),
-    fetchWithTimeout('https://dse.co.tz/en/all-equities'),
-    fetchWithTimeout('https://dse.co.tz/en'),
+  const board: BoardMap = {};
+  const sourceErrors: string[] = [];
+
+  const [jsonRes, allEqRes, homeRes, hisaRes] = await Promise.allSettled([
+    fetchWithTimeout('https://dse.co.tz/api/get/live/market/prices', 6500),
+    fetchWithTimeout('https://dse.co.tz/en/all-equities', 6500),
+    fetchWithTimeout('https://dse.co.tz/en', 6500),
+    fetchWithTimeout('https://hisazangu.com/stocks', 8000),
   ]);
 
-  if (jsonRes.status === 'fulfilled' && jsonRes.value.ok) {
-    try {
-      const payload = (await jsonRes.value.json()) as {
-        success?: boolean;
-        data?: Array<{ company?: string; price?: number | string; change?: number | string }>;
-      };
-      if (Array.isArray(payload.data)) {
-        for (const item of payload.data) {
-          const sym = String(item.company || '').trim().toUpperCase();
-          const price = Number(item.price);
-          if (sym && Number.isFinite(price) && price > 0) {
-            board[sym] = {
-              price,
-              change: Number.isFinite(Number(item.change)) ? Number(item.change) : undefined,
-              origin: 'DSE Live API',
-            };
+  if (jsonRes.status === 'fulfilled') {
+    if (jsonRes.value.ok) {
+      try {
+        const payload = (await jsonRes.value.json()) as {
+          success?: boolean;
+          data?: Array<{ company?: string; price?: number | string; change?: number | string }>;
+        };
+        if (Array.isArray(payload.data)) {
+          for (const item of payload.data) {
+            const sym = String(item.company || '').trim().toUpperCase();
+            const price = Number(item.price);
+            if (sym && Number.isFinite(price) && price > 0) {
+              board[sym] = {
+                price,
+                change: Number.isFinite(Number(item.change)) ? Number(item.change) : undefined,
+                origin: 'DSE Live API',
+              };
+            }
           }
         }
+      } catch (e) {
+        sourceErrors.push(`DSE Live API parse error: ${(e as Error).message}`);
       }
-    } catch (e) {
-      errors.push(`DSE API parse error: ${(e as Error).message}`);
+    } else {
+      sourceErrors.push(`DSE Live API HTTP ${jsonRes.value.status}`);
     }
+  } else {
+    sourceErrors.push(`dse.co.tz unreachable (${(jsonRes.reason as Error)?.message || 'timeout'})`);
   }
 
   for (const [label, res] of [
     ['DSE Equities Board', allEqRes],
     ['DSE Home Board', homeRes],
   ] as const) {
-    if (res.status === 'fulfilled' && res.value.ok) {
+    if (res.status === 'fulfilled') {
+      if (res.value.ok) {
+        try {
+          const html = await res.value.text();
+          const parsed = parseDseHtmlMultiStrategy(html, label);
+          for (const [k, v] of Object.entries(parsed)) {
+            if (!board[k]) board[k] = v;
+          }
+        } catch (e) {
+          sourceErrors.push(`${label}: ${(e as Error).message}`);
+        }
+      } else {
+        sourceErrors.push(`${label}: HTTP ${res.value.status}`);
+      }
+    } else {
+      sourceErrors.push(`${label}: ${(res.reason as Error)?.message || 'timeout'}`);
+    }
+  }
+
+  // Fallback & ETF completion via Hisazangu live DSE mirror (covers equities + IEACLC-ETF, VERTEX-ETF, ZAN TIMIZA ETF)
+  if (hisaRes.status === 'fulfilled') {
+    if (hisaRes.value.ok) {
       try {
-        const html = await res.value.text();
-        const parsed = parseDseHtmlMultiStrategy(html, label);
+        const html = await hisaRes.value.text();
+        const parsed = parseHisazanguStocksHtml(html, 'DSE via Hisazangu');
         for (const [k, v] of Object.entries(parsed)) {
           if (!board[k]) board[k] = v;
         }
       } catch (e) {
-        errors.push(`${label}: ${(e as Error).message}`);
+        sourceErrors.push(`Hisazangu DSE Feed: ${(e as Error).message}`);
       }
+    } else {
+      sourceErrors.push(`Hisazangu DSE Feed: HTTP ${hisaRes.value.status}`);
     }
+  } else {
+    sourceErrors.push(`Hisazangu DSE Feed: ${(hisaRes.reason as Error)?.message || 'timeout'}`);
   }
 
-  return { board, errors };
+  applyDseBoardAliases(board);
+
+  if (Object.keys(board).length > 0) {
+    dseBoardCache = { board, ts: Date.now() };
+    return { board, errors: [] };
+  }
+
+  return { board, errors: sourceErrors };
 }
 
 type UttMap = Record<string, { nav: number; sale: number; repurchase: number; asOf: string }>;
@@ -1377,6 +1664,9 @@ const DSE_INVESTING_SLUGS: Array<[RegExp, string]> = [
   [/afriprise/i, 'AFRIPRISE'],
   [/nicol|\bnico\b/i, 'NICO'],
   [/mkombozi|\bmkcb\b/i, 'MKCB'],
+  [/ieaclc|itrust.*etf/i, 'IEACLC-ETF'],
+  [/vertex/i, 'VERTEX-ETF'],
+  [/zan.*timiza/i, 'ZAN TIMIZA ETF'],
 ];
 
 function extractInvestingSlug(rawUrl: string): string {
@@ -2031,6 +2321,17 @@ function deleteReceiptFileIfUnused(database: DatabaseSync, receiptsDir: string, 
 
 // ----------------------------------------------------------------------------- Express App
 async function startServer() {
+  getMembersDb();
+  sweepExpiredMembers();
+  const expirySweepTimer = setInterval(() => {
+    try {
+      sweepExpiredMembers();
+    } catch {
+      // Ignore transient sweep errors
+    }
+  }, 5 * 60 * 1000);
+  expirySweepTimer.unref();
+
   const app = express();
   app.use(express.json({ limit: '8mb' }));
 
@@ -2135,10 +2436,10 @@ async function startServer() {
     const cleanNote = rawNote.slice(0, 160);
     const now = new Date().toISOString();
 
-    const pdb = getPlatformDb();
-    pdb
+    const mdb = getMembersDb();
+    mdb
       .prepare(
-        `UPDATE platform_users
+        `UPDATE members
          SET uid = COALESCE(NULLIF(?, ''), uid),
              payment_status = 'pending_verification',
              claim_username = ?,
@@ -2261,6 +2562,7 @@ async function startServer() {
       }
 
       const now = new Date().toISOString();
+      const expiresAt = addDaysIso(now, MEMBERSHIP_DURATION_DAYS);
       const paymentRef = String(session.id || rawSessionId).slice(0, 80);
       const payerHint = String(session.customer_details?.email || email || 'Stripe').slice(0, 60);
       const sub: SubscriptionRecord = {
@@ -2270,25 +2572,28 @@ async function startServer() {
         paymentRef,
         payerHint,
         paidAt: now,
+        expiresAt,
+        daysRemaining: MEMBERSHIP_DURATION_DAYS,
         claimStatus: 'paid',
         claimUsername: '',
         claimNote: '',
         claimedAt: '',
       };
 
-      const pdb = getPlatformDb();
-      pdb
+      const mdb = getMembersDb();
+      mdb
         .prepare(
-          `UPDATE platform_users
-           SET plan = 'pro',
+          `UPDATE members
+           SET membership_status = 'pro',
                payment_status = 'paid',
                payment_provider = 'stripe',
                payment_ref = ?,
                payer_hint = ?,
-               paid_at = ?
+               paid_at = ?,
+               expires_at = ?
            WHERE LOWER(email) = ?`
         )
-        .run(paymentRef, payerHint, now, email.toLowerCase());
+        .run(paymentRef, payerHint, now, expiresAt, email.toLowerCase());
 
       const stmt = db.prepare('INSERT OR REPLACE INTO settings (k, v) VALUES (?, ?)');
       stmt.run('plan', 'pro');
@@ -2437,17 +2742,19 @@ async function startServer() {
     const rawNote = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 120) : '';
 
     if (!rawEmail || rawEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)) {
-      return res.status(400).json({ error: 'Enter a valid customer Google email address.' });
+      return res.status(400).json({ error: 'Enter a valid member Google email address.' });
     }
     if (!targetPlan) {
       return res.status(400).json({ error: 'Plan must be "pro" or "free".' });
     }
 
-    const pdb = getPlatformDb();
-    const existing = pdb
-      .prepare('SELECT * FROM platform_users WHERE LOWER(email) = ?')
-      .get(rawEmail) as PlatformUserRow | undefined;
+    const mdb = getMembersDb();
+    sweepExpiredMembers(mdb);
+    const existing = mdb
+      .prepare('SELECT * FROM members WHERE LOWER(email) = ?')
+      .get(rawEmail) as MemberSqlRow | undefined;
     const now = new Date().toISOString();
+    const expiresAt = addDaysIso(now, MEMBERSHIP_DURATION_DAYS);
 
     if (targetPlan === 'pro') {
       const provider: PaymentProvider =
@@ -2457,55 +2764,145 @@ async function startServer() {
       const payerHint = rawNote || existing?.claim_username || existing?.display_name || rawEmail;
 
       if (existing) {
-        pdb
+        mdb
           .prepare(
-            `UPDATE platform_users
-             SET plan = 'pro',
+            `UPDATE members
+             SET membership_status = 'pro',
                  payment_status = 'paid',
                  payment_provider = ?,
                  payment_ref = ?,
                  payer_hint = ?,
-                 paid_at = ?
+                 paid_at = ?,
+                 expires_at = ?
              WHERE LOWER(email) = ?`
           )
-          .run(provider, paymentRef, payerHint.slice(0, 60), now, rawEmail);
+          .run(provider, paymentRef, payerHint.slice(0, 60), now, expiresAt, rawEmail);
       } else {
-        pdb
+        mdb
           .prepare(
-            `INSERT INTO platform_users (
-               email, uid, display_name, plan, payment_status, payment_provider, payment_ref,
-               payer_hint, claim_username, claim_note, claimed_at, paid_at, last_seen_at, created_at
-             ) VALUES (?, '', '', 'pro', 'paid', ?, ?, ?, '', ?, '', ?, '', ?)`
+            `INSERT INTO members (
+               email, uid, display_name, membership_status, payment_status, payment_provider, payment_ref,
+               payer_hint, claim_username, claim_note, claimed_at, paid_at, expires_at, last_seen_at, created_at
+             ) VALUES (?, '', '', 'pro', 'paid', ?, ?, ?, '', ?, '', ?, ?, '', ?)`
           )
-          .run(rawEmail, provider, paymentRef, payerHint.slice(0, 60), rawNote.slice(0, 160), now, now);
+          .run(
+            rawEmail,
+            provider,
+            paymentRef,
+            payerHint.slice(0, 60),
+            rawNote.slice(0, 160),
+            now,
+            expiresAt,
+            now
+          );
       }
     } else if (existing) {
-      pdb
+      mdb
         .prepare(
-          `UPDATE platform_users
-           SET plan = 'free',
+          `UPDATE members
+           SET membership_status = 'free',
                payment_status = 'none',
                payment_provider = 'none',
                payment_ref = '',
                payer_hint = '',
-               paid_at = ''
+               paid_at = '',
+               expires_at = ''
            WHERE LOWER(email) = ?`
         )
         .run(rawEmail);
     } else {
-      pdb
+      mdb
         .prepare(
-          `INSERT INTO platform_users (
-             email, uid, display_name, plan, payment_status, payment_provider, payment_ref,
-             payer_hint, claim_username, claim_note, claimed_at, paid_at, last_seen_at, created_at
-           ) VALUES (?, '', '', 'free', 'none', 'none', '', '', '', '', '', '', '', ?)`
+          `INSERT INTO members (
+             email, uid, display_name, membership_status, payment_status, payment_provider, payment_ref,
+             payer_hint, claim_username, claim_note, claimed_at, paid_at, expires_at, last_seen_at, created_at
+           ) VALUES (?, '', '', 'free', 'none', 'none', '', '', '', '', '', '', '', '', ?)`
         )
         .run(rawEmail, now);
     }
 
-    // If that user's DB is cached in memory, sync immediately via getSettings
-    const updatedRow = pdb
-      .prepare('SELECT uid FROM platform_users WHERE LOWER(email) = ?')
+    const updatedRow = mdb
+      .prepare('SELECT uid FROM members WHERE LOWER(email) = ?')
+      .get(rawEmail) as { uid: string } | undefined;
+    if (updatedRow?.uid && userDbCache.has(updatedRow.uid)) {
+      const targetDb = userDbCache.get(updatedRow.uid)!;
+      getSettings(targetDb);
+    }
+
+    res.json({
+      ok: true,
+      users: listAdminUserRecords(),
+    });
+  });
+
+  app.post('/api/admin/users/extend', (req, res) => {
+    if (!requireAdminUser(req, res)) return;
+    const rawEmail = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    const parsedDays = Math.floor(Number(req.body?.days ?? MEMBERSHIP_DURATION_DAYS));
+    const rawNote = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 120) : '';
+
+    if (!rawEmail || rawEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)) {
+      return res.status(400).json({ error: 'Enter a valid member Google email address.' });
+    }
+    if (!Number.isFinite(parsedDays) || parsedDays < 1 || parsedDays > 365) {
+      return res.status(400).json({ error: 'Extension days must be between 1 and 365.' });
+    }
+
+    const mdb = getMembersDb();
+    sweepExpiredMembers(mdb);
+    const existing = mdb
+      .prepare('SELECT * FROM members WHERE LOWER(email) = ?')
+      .get(rawEmail) as MemberSqlRow | undefined;
+    const now = new Date().toISOString();
+
+    if (existing && existing.membership_status === 'pro') {
+      const currentExpiryMs = Date.parse(existing.expires_at);
+      const baseAnchor =
+        Number.isFinite(currentExpiryMs) && currentExpiryMs > Date.now() ? existing.expires_at : now;
+      const newExpiresAt = addDaysIso(baseAnchor, parsedDays);
+      mdb
+        .prepare(
+          `UPDATE members
+           SET membership_status = 'pro',
+               payment_status = 'paid',
+               expires_at = ?,
+               claim_note = CASE WHEN ? != '' THEN ? ELSE claim_note END
+           WHERE LOWER(email) = ?`
+        )
+        .run(newExpiresAt, rawNote, rawNote, rawEmail);
+    } else if (existing) {
+      const newExpiresAt = addDaysIso(now, parsedDays);
+      const paymentRef =
+        existing.payment_ref || `ADM-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+      const payerHint = rawNote || existing.claim_username || existing.display_name || rawEmail;
+      mdb
+        .prepare(
+          `UPDATE members
+           SET membership_status = 'pro',
+               payment_status = 'paid',
+               payment_provider = CASE WHEN payment_provider = 'none' THEN 'admin_manual' ELSE payment_provider END,
+               payment_ref = ?,
+               payer_hint = ?,
+               paid_at = ?,
+               expires_at = ?
+           WHERE LOWER(email) = ?`
+        )
+        .run(paymentRef, payerHint.slice(0, 60), now, newExpiresAt, rawEmail);
+    } else {
+      const newExpiresAt = addDaysIso(now, parsedDays);
+      const paymentRef = `ADM-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+      mdb
+        .prepare(
+          `INSERT INTO members (
+             email, uid, display_name, membership_status, payment_status, payment_provider, payment_ref,
+             payer_hint, claim_username, claim_note, claimed_at, paid_at, expires_at, last_seen_at, created_at
+           ) VALUES (?, '', '', 'pro', 'paid', 'admin_manual', ?, ?, '', ?, '', ?, ?, '', ?)`
+        )
+        .run(rawEmail, paymentRef, (rawNote || rawEmail).slice(0, 60), rawNote, now, newExpiresAt, now);
+    }
+
+    const updatedRow = mdb
+      .prepare('SELECT uid FROM members WHERE LOWER(email) = ?')
       .get(rawEmail) as { uid: string } | undefined;
     if (updatedRow?.uid && userDbCache.has(updatedRow.uid)) {
       const targetDb = userDbCache.get(updatedRow.uid)!;
@@ -3103,8 +3500,12 @@ async function startServer() {
       const fxCache = new Map<string, number>();
       if (src === 'DSE') {
         const dse = await fetchDseBoard();
-        const hit = dse.board[sym.toUpperCase()];
-        if (!hit) return res.status(404).json({ error: `Ticker "${sym}" not found on DSE board` });
+        const hit = lookupDseBoardHit(sym, dse.board);
+        if (!hit) {
+          return res.status(404).json({
+            error: dse.errors.join('; ') || `Ticker "${sym}" not found on DSE board`,
+          });
+        }
         return res.json({
           priceTzs: hit.price,
           resolvedSymbol: sym.toUpperCase(),
@@ -3208,7 +3609,7 @@ async function startServer() {
         const fxCache = new Map<string, number>();
         if (src === 'DSE') {
           const dse = await fetchDseBoard();
-          const hit = dse.board[symbol.trim().toUpperCase()];
+          const hit = lookupDseBoardHit(symbol, dse.board);
           if (hit) {
             parsedPrice = hit.price;
             updatedLabel = nowStamp();
@@ -3329,7 +3730,7 @@ async function startServer() {
           }
         } else if (src === 'DSE') {
           const dse = await fetchDseBoard();
-          const hit = dse.board[symbol.trim().toUpperCase()];
+          const hit = lookupDseBoardHit(symbol, dse.board);
           if (hit) {
             parsedPrice = hit.price;
             updatedLabel = nowStamp();
@@ -3466,7 +3867,7 @@ async function startServer() {
     const needsUtt = holdings.some((h) => h.source === 'UTT AMIS');
 
     const [dseResult, uttResult] = await Promise.all([
-      needsDse ? fetchDseBoard() : Promise.resolve({ board: {} as BoardMap, errors: [] as string[] }),
+      needsDse ? fetchDseBoard(true) : Promise.resolve({ board: {} as BoardMap, errors: [] as string[] }),
       needsUtt
         ? fetchUttAmisNavs()
         : Promise.resolve({ funds: {} as UttMap, asOf: '', error: undefined as string | undefined }),
@@ -3498,7 +3899,7 @@ async function startServer() {
 
       try {
         if (src === 'DSE') {
-          const hit = dseResult.board[h.symbol.trim().toUpperCase()];
+          const hit = lookupDseBoardHit(h.symbol, dseResult.board);
           if (hit) {
             px = hit.price;
             resolvedSource = hit.origin;
@@ -3603,7 +4004,7 @@ async function startServer() {
     const needsUtt = indicators.some((i) => i.regex.startsWith('UTT_'));
 
     const [dseResult, uttResult] = await Promise.all([
-      needsDse ? fetchDseBoard() : Promise.resolve({ board: {} as BoardMap, errors: [] as string[] }),
+      needsDse ? fetchDseBoard(true) : Promise.resolve({ board: {} as BoardMap, errors: [] as string[] }),
       needsUtt
         ? fetchUttAmisNavs()
         : Promise.resolve({ funds: {} as UttMap, asOf: '', error: undefined as string | undefined }),
@@ -3628,7 +4029,7 @@ async function startServer() {
           }
         } else if (ind.regex.startsWith('DSE_')) {
           const ticker = ind.regex.replace('DSE_', '').toUpperCase();
-          const hit = dseResult.board[ticker];
+          const hit = lookupDseBoardHit(ticker, dseResult.board);
           if (hit) {
             val = `TZS ${hit.price.toLocaleString('en-US', {
               minimumFractionDigits: 2,

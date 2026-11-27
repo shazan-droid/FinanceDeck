@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
+  CalendarPlus,
   CheckCircle2,
   Clock,
   Crown,
+  Database,
   QrCode,
   RefreshCw,
   Search,
@@ -42,6 +44,11 @@ interface AdminTabProps {
     paymentRef?: string;
     note?: string;
   }) => Promise<AdminUserRecord[]>;
+  onExtendUserPlan: (payload: {
+    email: string;
+    days: number;
+    note?: string;
+  }) => Promise<AdminUserRecord[]>;
 }
 
 export function AdminTab({
@@ -53,6 +60,7 @@ export function AdminTab({
   onDeleteQrImage,
   onSaveBillingConfig,
   onSetUserPlan,
+  onExtendUserPlan,
 }: AdminTabProps) {
   const t = getTranslations(language);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -70,6 +78,7 @@ export function AdminTab({
 
   const [busyAction, setBusyAction] = useState(false);
   const [busyEmail, setBusyEmail] = useState<string | null>(null);
+  const [extendDaysMap, setExtendDaysMap] = useState<Record<string, number>>({});
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
 
@@ -236,6 +245,29 @@ export function AdminTab({
       );
     } catch (err) {
       setError((err as Error).message || 'Could not update user plan.');
+    } finally {
+      setBusyEmail(null);
+    }
+  };
+
+  const handleExtendUser = async (user: AdminUserRecord, days: number) => {
+    const cleanDays = Math.min(365, Math.max(1, Math.round(days || 30)));
+    setError('');
+    setNotice('');
+    setBusyEmail(user.email);
+    try {
+      const updated = await onExtendUserPlan({
+        email: user.email,
+        days: cleanDays,
+      });
+      setUsers(updated);
+      setNotice(
+        language === 'sw'
+          ? `Uanachama wa ${user.email} umeongezwa kwa siku ${cleanDays}.`
+          : `Extended ${user.email}'s Pro membership by +${cleanDays} days.`
+      );
+    } catch (err) {
+      setError((err as Error).message || 'Could not extend membership.');
     } finally {
       setBusyEmail(null);
     }
@@ -449,8 +481,14 @@ export function AdminTab({
 
       {/* Customer Accounts Table / Cards */}
       <section className="rounded-lg border border-[#242424] bg-[#121212] p-5">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <h2 className="text-sm font-semibold text-white">{t.adminUsersTitle}</h2>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-white">
+              <Database className="h-4 w-4 text-[#C1121F]" />
+              <span>{t.adminUsersTitle}</span>
+            </h2>
+            <p className="mt-1 text-xs text-[#8E8E8E]">{t.adminMembersDbNotice}</p>
+          </div>
 
           <div className="flex flex-wrap items-center gap-2">
             {(
@@ -501,17 +539,23 @@ export function AdminTab({
             {filteredUsers.map((user) => {
               const isPro = user.plan === 'pro';
               const isPending = !isPro && user.paymentStatus === 'pending_verification';
+              const isExpired = !isPro && user.paymentStatus === 'expired';
               const isBusy = busyEmail === user.email;
+              const customDays = extendDaysMap[user.email] ?? 30;
+              const expiryDateShort = user.expiresAt ? user.expiresAt.slice(0, 10) : '';
+              const expiringSoon = isPro && typeof user.daysRemaining === 'number' && user.daysRemaining <= 5;
 
               return (
                 <div
                   key={user.email}
-                  className={`flex flex-col gap-3 rounded-lg border p-3.5 sm:flex-row sm:items-center sm:justify-between ${
+                  className={`flex flex-col gap-3 rounded-lg border p-3.5 lg:flex-row lg:items-center lg:justify-between ${
                     isPending
                       ? 'border-amber-700/50 bg-[#171209]'
                       : isPro
                         ? 'border-emerald-900/40 bg-[#0D1510]'
-                        : 'border-[#242424] bg-[#0B0B0B]'
+                        : isExpired
+                          ? 'border-rose-900/40 bg-[#160C0E]'
+                          : 'border-[#242424] bg-[#0B0B0B]'
                   }`}
                 >
                   <div className="min-w-0 space-y-1">
@@ -529,9 +573,35 @@ export function AdminTab({
                           <Clock className="h-3 w-3" />
                           {t.adminStatusPending}
                         </span>
+                      ) : isExpired ? (
+                        <span className="inline-flex items-center gap-1 rounded border border-rose-800/60 bg-rose-950/50 px-2 py-0.5 text-[10px] font-semibold text-rose-300">
+                          <Clock className="h-3 w-3" />
+                          {t.adminStatusExpired}
+                        </span>
                       ) : (
                         <span className="inline-flex items-center rounded border border-[#2E2E2E] bg-[#161616] px-2 py-0.5 text-[10px] font-medium text-[#9A9A9A]">
                           {t.adminStatusFree}
+                        </span>
+                      )}
+
+                      {isPro && expiryDateShort && (
+                        <span
+                          className={`font-mono-nums inline-flex items-center rounded border px-2 py-0.5 text-[10px] font-medium ${
+                            expiringSoon
+                              ? 'border-amber-700/60 bg-amber-950/50 text-amber-300'
+                              : 'border-[#2E2E2E] bg-[#141414] text-[#CCCCCC]'
+                          }`}
+                        >
+                          {t.adminExpiresPrefix} {expiryDateShort}
+                          {typeof user.daysRemaining === 'number'
+                            ? ` · ${user.daysRemaining}d ${t.adminDaysLeftSuffix}`
+                            : ''}
+                        </span>
+                      )}
+
+                      {isExpired && expiryDateShort && (
+                        <span className="font-mono-nums text-[10px] text-rose-300/80">
+                          ({expiryDateShort})
                         </span>
                       )}
                     </div>
@@ -558,17 +628,61 @@ export function AdminTab({
                     )}
                   </div>
 
-                  <div className="flex shrink-0 items-center gap-2">
+                  <div className="flex flex-wrap shrink-0 items-center gap-2">
                     {isPro ? (
-                      <button
-                        type="button"
-                        disabled={isBusy}
-                        onClick={() => void handleToggleUserPlan(user, 'free')}
-                        className="inline-flex min-h-[38px] items-center justify-center gap-1.5 rounded-md border border-[#343434] bg-[#121212] px-3 py-1.5 text-xs font-medium text-[#CCCCCC] transition-colors hover:border-red-500 hover:text-red-300 disabled:opacity-50"
-                      >
-                        <UserMinus className="h-3.5 w-3.5" />
-                        <span>{t.adminSetFreeBtn}</span>
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => void handleExtendUser(user, 7)}
+                          className="font-mono-nums inline-flex min-h-[36px] items-center justify-center rounded-md border border-emerald-800/60 bg-emerald-950/40 px-2.5 py-1.5 text-xs font-semibold text-emerald-300 transition-colors hover:bg-emerald-900/60 disabled:opacity-50"
+                        >
+                          +7d
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => void handleExtendUser(user, 30)}
+                          className="font-mono-nums inline-flex min-h-[36px] items-center justify-center rounded-md border border-emerald-700/70 bg-emerald-900/40 px-2.5 py-1.5 text-xs font-semibold text-emerald-200 transition-colors hover:bg-emerald-800/60 disabled:opacity-50"
+                        >
+                          +30d
+                        </button>
+                        <div className="inline-flex items-center overflow-hidden rounded-md border border-[#343434] bg-[#121212]">
+                          <input
+                            type="number"
+                            min={1}
+                            max={365}
+                            aria-label={t.adminExtendDaysLabel}
+                            value={customDays}
+                            onChange={(e) => {
+                              const parsed = Number.parseInt(e.target.value, 10);
+                              setExtendDaysMap((prev) => ({
+                                ...prev,
+                                [user.email]: Number.isFinite(parsed) ? parsed : 30,
+                              }));
+                            }}
+                            className="font-mono-nums h-[36px] w-14 border-r border-[#2C2C2C] bg-[#0B0B0B] px-1.5 text-center text-xs text-white focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => void handleExtendUser(user, customDays)}
+                            className="inline-flex h-[36px] items-center gap-1 px-2.5 text-xs font-semibold text-emerald-300 transition-colors hover:bg-emerald-950/60 disabled:opacity-50"
+                          >
+                            <CalendarPlus className="h-3.5 w-3.5" />
+                            <span>{t.adminExtendBtn}</span>
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => void handleToggleUserPlan(user, 'free')}
+                          className="inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-md border border-[#343434] bg-[#121212] px-3 py-1.5 text-xs font-medium text-[#CCCCCC] transition-colors hover:border-red-500 hover:text-red-300 disabled:opacity-50"
+                        >
+                          <UserMinus className="h-3.5 w-3.5" />
+                          <span>{t.adminSetFreeBtn}</span>
+                        </button>
+                      </>
                     ) : (
                       <button
                         type="button"
